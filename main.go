@@ -32,16 +32,16 @@ var (
 
 func main() {
 	var (
-		addr         = flag.String("addr", ":80", "http address")
-		tlsAddr      = flag.String("tls.addr", "", "tls address")
+		addr         = flag.String("addr", ":80", "HTTP address")
+		tlsAddr      = flag.String("tls.addr", "", "HTTPS address")
 		tlsKey       = flag.String("tls.key", "", "TLS private key file")
 		tlsCert      = flag.String("tls.cert", "", "TLS certificate file")
-		upstreamList = flag.String("upstream", "", "upstream list")
+		upstreamList = flag.String("upstream", "", "Upstream list")
 	)
 
 	flag.Parse()
 
-	log.Printf("geth-proxy")
+	log.Printf("geth-gateway")
 	log.Printf("HTTP address: %s", *addr)
 	log.Printf("HTTPS address: %s", *tlsAddr)
 	log.Printf("Upstream: %s", *upstreamList)
@@ -122,8 +122,8 @@ func main() {
 
 		if *tlsKey == "" || *tlsCert == "" {
 			cert, err := parapet.GenerateSelfSignCertificate(parapet.SelfSign{
-				CommonName: "geth-proxy",
-				Hosts:      []string{"geth-proxy"},
+				CommonName: "geth-gateway",
+				Hosts:      []string{"geth-gateway"},
 				NotBefore:  time.Now().Add(-5 * time.Minute),
 				NotAfter:   time.Now().AddDate(10, 0, 0),
 			})
@@ -163,12 +163,12 @@ type lastBlock struct {
 
 var lastBlocks []lastBlock
 
-func getLastBlock(ctx context.Context, i int) (*types.Block, error) {
+func getLastBlock(ctx context.Context, i int, force bool) (*types.Block, error) {
 	b := &lastBlocks[i]
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if time.Since(b.UpdatedAt) < time.Second {
+	if !force && time.Since(b.UpdatedAt) < time.Second {
 		return b.Block, nil
 	}
 
@@ -181,7 +181,7 @@ func getLastBlock(ctx context.Context, i int) (*types.Block, error) {
 	return b.Block, nil
 }
 
-const promNamespace = "geth_proxy"
+const promNamespace = "geth_gateway"
 
 var headDuration = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 	Namespace: promNamespace,
@@ -203,7 +203,7 @@ func updateLastBlock(ctx context.Context) {
 		go func() {
 			defer wg.Done()
 
-			block, _ := getLastBlock(ctx, i)
+			block, _ := getLastBlock(ctx, i, true)
 			if block == nil {
 				return
 			}
