@@ -1,4 +1,4 @@
-module github.com/moonrhythm/geth-proxy
+module github.com/moonrhythm/geth-gateway
 
 go 1.17
 
