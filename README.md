@@ -16,7 +16,7 @@ Gateway for multiple geth nodes
 | -tls.addr | string | HTTPS listening address | |
 | -tls.key | string | TLS private key file | |
 | -tls.cert | stirng | TLS certificate file | |
-| -upstream | string[] | Geth address | http://192.168.0.2,ws://192.168.0.2,http://192.168.0.3:8545 |
+| -upstream | string[] | Geth address | http://192.168.0.2,http://192.168.0.3:8545 |
 
 ## License
 
