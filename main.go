@@ -288,6 +288,5 @@ func (tr *tr) RoundTrip(r *http.Request) (*http.Response, error) {
 	r.URL.Host = t.Host
 	r.URL.Path = path.Join(t.Path, r.URL.Path)
 	r.Host = t.Host
-	log.Println(r.URL.String())
 	return trs[t.Scheme].RoundTrip(r)
 }
