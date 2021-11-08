@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"flag"
 	"log"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/moonrhythm/parapet"
+	"github.com/moonrhythm/parapet/pkg/location"
 	"github.com/moonrhythm/parapet/pkg/logger"
 	"github.com/moonrhythm/parapet/pkg/prom"
 	"github.com/moonrhythm/parapet/pkg/upstream"
@@ -26,17 +28,22 @@ var (
 	ethClients      []*ethclient.Client
 	upstreamAddrs   []string
 	upstreams       []*url.URL
-	muBestUpstreams sync.RWMutex
-	bestUpstreams   []*url.URL
+	healthyDuration time.Duration
+
+	muBestUpstreams  sync.RWMutex
+	bestUpstreams    []*url.URL
+	bestBlock        *types.Block
+	bestBlockUpdated time.Time
 )
 
 func main() {
 	var (
-		addr         = flag.String("addr", ":80", "HTTP address")
-		tlsAddr      = flag.String("tls.addr", "", "HTTPS address")
-		tlsKey       = flag.String("tls.key", "", "TLS private key file")
-		tlsCert      = flag.String("tls.cert", "", "TLS certificate file")
-		upstreamList = flag.String("upstream", "", "Upstream list")
+		addr                = flag.String("addr", ":80", "HTTP address")
+		tlsAddr             = flag.String("tls.addr", "", "HTTPS address")
+		tlsKey              = flag.String("tls.key", "", "TLS private key file")
+		tlsCert             = flag.String("tls.cert", "", "TLS certificate file")
+		upstreamList        = flag.String("upstream", "", "Upstream list")
+		gethHealthyDuration = flag.Duration("healthy-duration", time.Minute, "duration from last block that mark as healthy")
 	)
 
 	flag.Parse()
@@ -45,6 +52,9 @@ func main() {
 	log.Printf("HTTP address: %s", *addr)
 	log.Printf("HTTPS address: %s", *tlsAddr)
 	log.Printf("Upstream: %s", *upstreamList)
+	log.Printf("Healthy Duration: %s", *gethHealthyDuration)
+
+	healthyDuration = *gethHealthyDuration
 
 	prom.Registry().MustRegister(headDuration, headNumber)
 
@@ -87,6 +97,20 @@ func main() {
 
 	s.Use(logger.Stdout())
 	s.Use(prom.Requests())
+
+	// healthz
+	{
+		l := location.Exact("/healthz")
+		l.Use(parapet.Handler(healthz))
+		s.Use(l)
+	}
+
+	// upstreams
+	{
+		l := location.Exact("/upstreams")
+		l.Use(parapet.Handler(upstreamsHandler))
+		s.Use(l)
+	}
 
 	// http
 	s.Use(upstream.New(&tr{}))
@@ -195,6 +219,7 @@ var headNumber = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 
 func updateLastBlock(ctx context.Context) {
 	blockNumbers := make([]uint64, len(lastBlocks))
+	blockData := make([]*types.Block, len(lastBlocks))
 
 	var wg sync.WaitGroup
 	for i := range lastBlocks {
@@ -209,6 +234,7 @@ func updateLastBlock(ctx context.Context) {
 			}
 
 			blockNumbers[i] = block.NumberU64()
+			blockData[i] = block
 
 			t := time.Unix(int64(block.Time()), 0)
 			diff := time.Since(t)
@@ -234,14 +260,18 @@ func updateLastBlock(ctx context.Context) {
 
 	// collect all best block rpc
 	best := make([]*url.URL, 0, len(blockNumbers))
+	var bestIndex int
 	for i, b := range blockNumbers {
 		if b == h {
 			best = append(best, upstreams[i])
+			bestIndex = i
 		}
 	}
 
 	muBestUpstreams.Lock()
 	bestUpstreams = best
+	bestBlock = blockData[bestIndex]
+	bestBlockUpdated = time.Now()
 	muBestUpstreams.Unlock()
 }
 
@@ -262,10 +292,10 @@ type tr struct {
 var (
 	trs = map[string]http.RoundTripper{
 		"http": &upstream.HTTPTransport{
-			MaxIdleConns: 10000,
+			MaxIdleConns: 1000,
 		},
 		"https": &upstream.HTTPSTransport{
-			MaxIdleConns: 10000,
+			MaxIdleConns: 1000,
 		},
 	}
 )
@@ -289,4 +319,68 @@ func (tr *tr) RoundTrip(r *http.Request) (*http.Response, error) {
 	r.URL.Path = path.Join(t.Path, r.URL.Path)
 	r.Host = t.Host
 	return trs[t.Scheme].RoundTrip(r)
+}
+
+func isReady() bool {
+	muBestUpstreams.RLock()
+	block := bestBlock
+	muBestUpstreams.RUnlock()
+
+	t := time.Unix(int64(block.Time()), 0)
+	return time.Since(t) <= healthyDuration
+}
+
+func isLive() bool {
+	muBestUpstreams.RLock()
+	ok := len(bestUpstreams) > 0
+	updated := bestBlockUpdated
+	muBestUpstreams.RUnlock()
+
+	return ok && time.Since(updated) <= 10*time.Second
+}
+
+func healthz(w http.ResponseWriter, r *http.Request) {
+	if r.FormValue("ready") == "1" {
+		if !isReady() {
+			http.Error(w, "not ready", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ready"))
+		return
+	}
+
+	if !isLive() {
+		http.Error(w, "not ok", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("ok"))
+}
+
+type upstreamsResponse struct {
+	Upstreams []string `json:"upstreams"`
+	Block     struct {
+		Number   uint64 `json:"number"`
+		Duration string `json:"duration"`
+	} `json:"block"`
+}
+
+func upstreamsHandler(w http.ResponseWriter, r *http.Request) {
+	muBestUpstreams.RLock()
+	block := bestBlock
+	list := bestUpstreams
+	muBestUpstreams.RUnlock()
+
+	var resp upstreamsResponse
+	for _, x := range list {
+		resp.Upstreams = append(resp.Upstreams, x.String())
+	}
+	if block != nil {
+		resp.Block.Number = block.NumberU64()
+		resp.Block.Duration = time.Since(time.Unix(int64(block.Time()), 0)).String()
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(resp)
 }

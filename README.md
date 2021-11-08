@@ -17,6 +17,7 @@ Gateway for multiple geth nodes
 | -tls.key | string | TLS private key file | |
 | -tls.cert | stirng | TLS certificate file | |
 | -upstream | string[] | Geth address | http://192.168.0.2,http://192.168.0.3:8545 |
+| -healthy-duration | duration | Duration from last block that mark as healthy | 1m |
 
 ## License
 
