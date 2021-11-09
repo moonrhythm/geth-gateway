@@ -44,6 +44,8 @@ func main() {
 		tlsCert             = flag.String("tls.cert", "", "TLS certificate file")
 		upstreamList        = flag.String("upstream", "", "Upstream list")
 		gethHealthyDuration = flag.Duration("healthy-duration", time.Minute, "duration from last block that mark as healthy")
+		healthCheckDeadline = flag.Duration("health-check.deadline", 4*time.Second, "deadline when run health check")
+		healthCheckInterval = flag.Duration("health-check.interval", 2*time.Second, "health check interval")
 	)
 
 	flag.Parse()
@@ -53,6 +55,7 @@ func main() {
 	log.Printf("HTTPS address: %s", *tlsAddr)
 	log.Printf("Upstream: %s", *upstreamList)
 	log.Printf("Healthy Duration: %s", *gethHealthyDuration)
+	log.Printf("Health Check Deadline: %s", *healthCheckDeadline)
 
 	healthyDuration = *gethHealthyDuration
 
@@ -85,11 +88,11 @@ func main() {
 		// update stats
 
 		for {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), *healthCheckDeadline)
 			updateLastBlock(ctx)
 			cancel()
 
-			time.Sleep(time.Second)
+			time.Sleep(*healthCheckInterval)
 		}
 	}()
 
