@@ -26,14 +26,23 @@ import (
 
 var (
 	ethClients      []*ethclient.Client
+	ethWsClients    []*ethclient.Client
 	upstreamAddrs   []string
-	upstreams       []*url.URL
+	wsUpstreamAddrs []string
+
+	upstreamURLs    []*url.URL
+	wsUpstreamURLs  []*url.URL
 	healthyDuration time.Duration
 
 	muBestUpstreams  sync.RWMutex
-	bestUpstreams    []*url.URL
+	bestUpstreamURLs []*url.URL
 	bestBlock        *types.Block
 	bestBlockUpdated time.Time
+
+	muBestWsUpstreams  sync.RWMutex
+	bestWsUpstreamURLs []*url.URL
+	bestWsBlock        *types.Block
+	bestWsBlockUpdated time.Time
 )
 
 func main() {
@@ -77,16 +86,30 @@ func main() {
 			log.Fatalf("can not dial geth; %v", err)
 		}
 
-		upstreamAddrs = append(upstreamAddrs, addr)
-		upstreams = append(upstreams, u)
-		ethClients = append(ethClients, client)
+		if u.Scheme == "ws" || u.Scheme == "wss" {
+			u.Scheme = "http" + strings.TrimPrefix(u.Scheme, "ws") // http or https
+			wsUpstreamAddrs = append(wsUpstreamAddrs, addr)
+			wsUpstreamURLs = append(wsUpstreamURLs, u)
+			ethWsClients = append(ethWsClients, client)
+		} else {
+			upstreamAddrs = append(upstreamAddrs, addr)
+			upstreamURLs = append(upstreamURLs, u)
+			ethClients = append(ethClients, client)
+		}
 	}
-	lastBlocks = make([]lastBlock, len(upstreams))
-	bestUpstreams = upstreams
 
+	// on startup, we don't have check last block yet
+	// TODO: add readiness health check to send healthy state after first upstream check
+	{
+		lastBlocks = make([]lastBlock, len(upstreamURLs))
+		bestUpstreamURLs = upstreamURLs
+
+		wsLastBlocks = make([]lastBlock, len(wsUpstreamURLs))
+		bestWsUpstreamURLs = wsUpstreamURLs
+	}
+
+	// http update loop
 	go func() {
-		// update stats
-
 		for {
 			ctx, cancel := context.WithTimeout(context.Background(), *healthCheckDeadline)
 			updateLastBlock(ctx)
@@ -95,6 +118,19 @@ func main() {
 			time.Sleep(*healthCheckInterval)
 		}
 	}()
+
+	// ws update loop
+	if len(wsUpstreamAddrs) > 0 {
+		go func() {
+			for {
+				ctx, cancel := context.WithTimeout(context.Background(), *healthCheckDeadline)
+				updateWsLastBlock(ctx)
+				cancel()
+
+				time.Sleep(*healthCheckInterval)
+			}
+		}()
+	}
 
 	var s parapet.Middlewares
 
@@ -112,6 +148,19 @@ func main() {
 	{
 		l := location.Exact("/upstreams")
 		l.Use(parapet.Handler(upstreamsHandler))
+		s.Use(l)
+	}
+
+	// ws upstreams
+	{
+		l := location.Exact("/wsupstreams")
+		l.Use(parapet.Handler(wsUpstreamsHandler))
+		s.Use(l)
+	}
+
+	if len(wsUpstreamAddrs) > 0 {
+		l := location.Exact("/ws")
+		l.Use(upstream.New(&wsTr{}))
 		s.Use(l)
 	}
 
@@ -188,9 +237,12 @@ type lastBlock struct {
 	UpdatedAt time.Time
 }
 
-var lastBlocks []lastBlock
+var (
+	lastBlocks   []lastBlock
+	wsLastBlocks []lastBlock
+)
 
-func getLastBlock(ctx context.Context, i int, force bool) (*types.Block, error) {
+func getLastBlock(ctx context.Context, ethClients []*ethclient.Client, i int, force bool) (*types.Block, error) {
 	b := &lastBlocks[i]
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -231,7 +283,7 @@ func updateLastBlock(ctx context.Context) {
 		go func() {
 			defer wg.Done()
 
-			block, _ := getLastBlock(ctx, i, true)
+			block, _ := getLastBlock(ctx, ethClients, i, true)
 			if block == nil {
 				return
 			}
@@ -266,16 +318,75 @@ func updateLastBlock(ctx context.Context) {
 	var bestIndex int
 	for i, b := range blockNumbers {
 		if b == h {
-			best = append(best, upstreams[i])
+			best = append(best, upstreamURLs[i])
 			bestIndex = i
 		}
 	}
 
 	muBestUpstreams.Lock()
-	bestUpstreams = best
+	bestUpstreamURLs = best
 	bestBlock = blockData[bestIndex]
 	bestBlockUpdated = time.Now()
 	muBestUpstreams.Unlock()
+}
+
+func updateWsLastBlock(ctx context.Context) {
+	// TODO: refactor ?
+	blockNumbers := make([]uint64, len(wsLastBlocks))
+	blockData := make([]*types.Block, len(wsLastBlocks))
+
+	var wg sync.WaitGroup
+	for i := range wsLastBlocks {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			block, _ := getLastBlock(ctx, ethWsClients, i, true)
+			if block == nil {
+				return
+			}
+
+			blockNumbers[i] = block.NumberU64()
+			blockData[i] = block
+
+			t := time.Unix(int64(block.Time()), 0)
+			diff := time.Since(t)
+
+			g, err := headDuration.GetMetricWith(prometheus.Labels{
+				"upstream": wsUpstreamAddrs[i],
+			})
+			if err == nil {
+				g.Set(float64(diff) / float64(time.Second))
+			}
+
+			g, err = headNumber.GetMetricWith(prometheus.Labels{
+				"upstream": wsUpstreamAddrs[i],
+			})
+			if err == nil {
+				g.Set(float64(block.NumberU64()))
+			}
+		}()
+	}
+	wg.Wait()
+
+	h := highestBlock(blockNumbers)
+
+	// collect all best block rpc
+	best := make([]*url.URL, 0, len(blockNumbers))
+	var bestIndex int
+	for i, b := range blockNumbers {
+		if b == h {
+			best = append(best, wsUpstreamURLs[i])
+			bestIndex = i
+		}
+	}
+
+	muBestWsUpstreams.Lock()
+	bestWsUpstreamURLs = best
+	bestWsBlock = blockData[bestIndex]
+	bestWsBlockUpdated = time.Now()
+	muBestWsUpstreams.Unlock()
 }
 
 func highestBlock(blockNumbers []uint64) uint64 {
@@ -306,7 +417,7 @@ var (
 // RoundTrip sends a request to upstream server
 func (tr *tr) RoundTrip(r *http.Request) (*http.Response, error) {
 	muBestUpstreams.RLock()
-	targets := bestUpstreams
+	targets := bestUpstreamURLs
 	muBestUpstreams.RUnlock()
 
 	if len(targets) == 0 {
@@ -324,6 +435,31 @@ func (tr *tr) RoundTrip(r *http.Request) (*http.Response, error) {
 	return trs[t.Scheme].RoundTrip(r)
 }
 
+// TODO: implement L7 ws load balancer ?
+type wsTr struct {
+	i uint32
+}
+
+func (tr *wsTr) RoundTrip(r *http.Request) (*http.Response, error) {
+	muBestWsUpstreams.RLock()
+	targets := bestWsUpstreamURLs
+	muBestWsUpstreams.RUnlock()
+
+	if len(targets) == 0 {
+		return nil, upstream.ErrUnavailable
+	}
+
+	i := atomic.AddUint32(&tr.i, 1) - 1
+	i %= uint32(len(targets))
+	t := targets[i]
+
+	r.URL.Scheme = t.Scheme
+	r.URL.Host = t.Host
+	r.URL.Path = t.Path
+	r.Host = t.Host
+	return trs[t.Scheme].RoundTrip(r)
+}
+
 func isReady() bool {
 	muBestUpstreams.RLock()
 	block := bestBlock
@@ -335,7 +471,7 @@ func isReady() bool {
 
 func isLive() bool {
 	muBestUpstreams.RLock()
-	ok := len(bestUpstreams) > 0
+	ok := len(bestUpstreamURLs) > 0
 	updated := bestBlockUpdated
 	muBestUpstreams.RUnlock()
 
@@ -372,8 +508,27 @@ type upstreamsResponse struct {
 func upstreamsHandler(w http.ResponseWriter, r *http.Request) {
 	muBestUpstreams.RLock()
 	block := bestBlock
-	list := bestUpstreams
+	list := bestUpstreamURLs
 	muBestUpstreams.RUnlock()
+
+	var resp upstreamsResponse
+	for _, x := range list {
+		resp.Upstreams = append(resp.Upstreams, x.String())
+	}
+	if block != nil {
+		resp.Block.Number = block.NumberU64()
+		resp.Block.Duration = time.Since(time.Unix(int64(block.Time()), 0)).String()
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func wsUpstreamsHandler(w http.ResponseWriter, r *http.Request) {
+	muBestWsUpstreams.RLock()
+	block := bestWsBlock
+	list := bestWsUpstreamURLs
+	muBestWsUpstreams.RUnlock()
 
 	var resp upstreamsResponse
 	for _, x := range list {
