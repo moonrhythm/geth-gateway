@@ -36,12 +36,12 @@ var (
 
 	muBestUpstreams  sync.RWMutex
 	bestUpstreamURLs []*url.URL
-	bestBlock        *types.Block
+	bestBlock        *types.Header
 	bestBlockUpdated time.Time
 
 	muBestWsUpstreams  sync.RWMutex
 	bestWsUpstreamURLs []*url.URL
-	bestWsBlock        *types.Block
+	bestWsBlock        *types.Header
 	bestWsBlockUpdated time.Time
 )
 
@@ -233,7 +233,7 @@ func main() {
 
 type lastBlock struct {
 	mu        sync.Mutex
-	Block     *types.Block
+	Block     *types.Header
 	UpdatedAt time.Time
 }
 
@@ -242,7 +242,7 @@ var (
 	wsLastBlocks []lastBlock
 )
 
-func getLastBlock(ctx context.Context, ethClients []*ethclient.Client, i int, force bool) (*types.Block, error) {
+func getLastBlock(ctx context.Context, ethClients []*ethclient.Client, i int, force bool) (*types.Header, error) {
 	b := &lastBlocks[i]
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -251,7 +251,7 @@ func getLastBlock(ctx context.Context, ethClients []*ethclient.Client, i int, fo
 		return b.Block, nil
 	}
 
-	block, err := ethClients[i].BlockByNumber(ctx, nil)
+	block, err := ethClients[i].HeaderByNumber(ctx, nil)
 	if err != nil {
 		return b.Block, err
 	}
@@ -274,7 +274,7 @@ var headNumber = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 
 func updateLastBlock(ctx context.Context) {
 	blockNumbers := make([]uint64, len(lastBlocks))
-	blockData := make([]*types.Block, len(lastBlocks))
+	blockData := make([]*types.Header, len(lastBlocks))
 
 	var wg sync.WaitGroup
 	for i := range lastBlocks {
@@ -288,10 +288,10 @@ func updateLastBlock(ctx context.Context) {
 				return
 			}
 
-			blockNumbers[i] = block.NumberU64()
+			blockNumbers[i] = block.Number.Uint64()
 			blockData[i] = block
 
-			t := time.Unix(int64(block.Time()), 0)
+			t := time.Unix(int64(block.Time), 0)
 			diff := time.Since(t)
 
 			g, err := headDuration.GetMetricWith(prometheus.Labels{
@@ -305,7 +305,7 @@ func updateLastBlock(ctx context.Context) {
 				"upstream": upstreamAddrs[i],
 			})
 			if err == nil {
-				g.Set(float64(block.NumberU64()))
+				g.Set(float64(block.Number.Uint64()))
 			}
 		}()
 	}
@@ -333,7 +333,7 @@ func updateLastBlock(ctx context.Context) {
 func updateWsLastBlock(ctx context.Context) {
 	// TODO: refactor ?
 	blockNumbers := make([]uint64, len(wsLastBlocks))
-	blockData := make([]*types.Block, len(wsLastBlocks))
+	blockData := make([]*types.Header, len(wsLastBlocks))
 
 	var wg sync.WaitGroup
 	for i := range wsLastBlocks {
@@ -347,10 +347,10 @@ func updateWsLastBlock(ctx context.Context) {
 				return
 			}
 
-			blockNumbers[i] = block.NumberU64()
+			blockNumbers[i] = block.Number.Uint64()
 			blockData[i] = block
 
-			t := time.Unix(int64(block.Time()), 0)
+			t := time.Unix(int64(block.Time), 0)
 			diff := time.Since(t)
 
 			g, err := headDuration.GetMetricWith(prometheus.Labels{
@@ -364,7 +364,7 @@ func updateWsLastBlock(ctx context.Context) {
 				"upstream": wsUpstreamAddrs[i],
 			})
 			if err == nil {
-				g.Set(float64(block.NumberU64()))
+				g.Set(float64(block.Number.Uint64()))
 			}
 		}()
 	}
@@ -465,7 +465,7 @@ func isReady() bool {
 	block := bestBlock
 	muBestUpstreams.RUnlock()
 
-	t := time.Unix(int64(block.Time()), 0)
+	t := time.Unix(int64(block.Time), 0)
 	return time.Since(t) <= healthyDuration
 }
 
@@ -516,8 +516,8 @@ func upstreamsHandler(w http.ResponseWriter, r *http.Request) {
 		resp.Upstreams = append(resp.Upstreams, x.String())
 	}
 	if block != nil {
-		resp.Block.Number = block.NumberU64()
-		resp.Block.Duration = time.Since(time.Unix(int64(block.Time()), 0)).String()
+		resp.Block.Number = block.Number.Uint64()
+		resp.Block.Duration = time.Since(time.Unix(int64(block.Time), 0)).String()
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -535,8 +535,8 @@ func wsUpstreamsHandler(w http.ResponseWriter, r *http.Request) {
 		resp.Upstreams = append(resp.Upstreams, x.String())
 	}
 	if block != nil {
-		resp.Block.Number = block.NumberU64()
-		resp.Block.Duration = time.Since(time.Unix(int64(block.Time()), 0)).String()
+		resp.Block.Number = block.Number.Uint64()
+		resp.Block.Duration = time.Since(time.Unix(int64(block.Time), 0)).String()
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
