@@ -48,6 +48,7 @@ var (
 func main() {
 	var (
 		addr                = flag.String("addr", ":80", "HTTP address")
+		logEnable           = flag.Bool("log", true, "Enable request log")
 		tlsAddr             = flag.String("tls.addr", "", "HTTPS address")
 		tlsKey              = flag.String("tls.key", "", "TLS private key file")
 		tlsCert             = flag.String("tls.cert", "", "TLS certificate file")
@@ -134,7 +135,9 @@ func main() {
 
 	var s parapet.Middlewares
 
-	s.Use(logger.Stdout())
+	if *logEnable {
+		s.Use(logger.Stdout())
+	}
 	s.Use(prom.Requests())
 
 	// healthz
