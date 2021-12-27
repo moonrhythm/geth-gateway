@@ -70,6 +70,7 @@ func main() {
 	healthyDuration = *gethHealthyDuration
 
 	prom.Registry().MustRegister(headDuration, headNumber)
+	go prom.Start(":6060")
 
 	for _, addr := range strings.Split(*upstreamList, ",") {
 		addr = strings.TrimSpace(addr)
