@@ -1,4 +1,4 @@
-FROM golang:1.17.6
+FROM golang:1.17.7
 
 ENV CGO_ENABLED=0
 WORKDIR /workspace
