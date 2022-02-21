@@ -28,25 +28,24 @@ var (
 	healthyDuration time.Duration
 
 	lbUpstream lb
-	// lbFallback lb
-	lbWs lb
+	lbFallback lb
+	lbWs       lb
 )
 
 func main() {
 	var (
-		addr                = flag.String("addr", ":80", "HTTP address")
-		logEnable           = flag.Bool("log", true, "Enable request log")
-		tlsAddr             = flag.String("tls.addr", "", "HTTPS address")
-		tlsKey              = flag.String("tls.key", "", "TLS private key file")
-		tlsCert             = flag.String("tls.cert", "", "TLS certificate file")
-		upstreamList        = flag.String("upstream", "", "Upstream list")
-		gethHealthyDuration = flag.Duration("healthy-duration", time.Minute, "duration from last block that mark as healthy")
-		healthCheckDeadline = flag.Duration("health-check.deadline", 4*time.Second, "deadline when run health check")
-		healthCheckInterval = flag.Duration("health-check.interval", 2*time.Second, "health check interval")
-
-		// fallbackUpstreamList        = flag.String("fallback.upstream", "", "fallback upstream list")
-		// fallbackHealthCheckDeadline = flag.Duration("fallback.health-check.deadline", 5*time.Second, "fallback deadline when run health check")
-		// fallbackHealthCheckInterval = flag.Duration("fallback.health-check.interval", 5*time.Second, "fallback health check interval")
+		addr                        = flag.String("addr", ":80", "HTTP address")
+		logEnable                   = flag.Bool("log", true, "Enable request log")
+		tlsAddr                     = flag.String("tls.addr", "", "HTTPS address")
+		tlsKey                      = flag.String("tls.key", "", "TLS private key file")
+		tlsCert                     = flag.String("tls.cert", "", "TLS certificate file")
+		upstreamList                = flag.String("upstream", "", "Upstream list")
+		gethHealthyDuration         = flag.Duration("healthy-duration", time.Minute, "duration from last block that mark as healthy")
+		healthCheckDeadline         = flag.Duration("health-check.deadline", 4*time.Second, "deadline when run health check")
+		healthCheckInterval         = flag.Duration("health-check.interval", 2*time.Second, "health check interval")
+		fallbackUpstreamList        = flag.String("fallback.upstream", "", "fallback upstream list")
+		fallbackHealthCheckDeadline = flag.Duration("fallback.health-check.deadline", 5*time.Second, "fallback deadline when run health check")
+		fallbackHealthCheckInterval = flag.Duration("fallback.health-check.interval", 5*time.Second, "fallback health check interval")
 	)
 
 	flag.Parse()
@@ -58,11 +57,12 @@ func main() {
 	log.Printf("Healthy Duration: %s", *gethHealthyDuration)
 	log.Printf("Health Check Deadline: %s", *healthCheckDeadline)
 	log.Printf("Health Check Interval: %s", *healthCheckInterval)
-	// log.Printf("Fallback Upstream: %s", *fallbackUpstreamList)
-	// log.Printf("Fallback Health Check Deadline: %s", *fallbackHealthCheckDeadline)
-	// log.Printf("Fallback Health Check Interval: %s", *fallbackHealthCheckInterval)
+	log.Printf("Fallback Upstream: %s", *fallbackUpstreamList)
+	log.Printf("Fallback Health Check Deadline: %s", *fallbackHealthCheckDeadline)
+	log.Printf("Fallback Health Check Interval: %s", *fallbackHealthCheckInterval)
 
 	healthyDuration = *gethHealthyDuration
+	lbUpstream.fallback = &lbFallback
 
 	prom.Registry().MustRegister(headDuration, headNumber)
 	go prom.Start(":6060")
@@ -97,34 +97,34 @@ func main() {
 		}
 	}
 
-	// for _, addr := range strings.Split(*fallbackUpstreamList, ",") {
-	// 	addr = strings.TrimSpace(addr)
-	// 	if addr == "" {
-	// 		continue
-	// 	}
-	//
-	// 	u, err := url.Parse(addr)
-	// 	if err != nil {
-	// 		log.Fatalf("can not parse url; %v", err)
-	// 	}
-	//
-	// 	client, err := ethclient.Dial(addr)
-	// 	if err != nil {
-	// 		log.Fatalf("can not dial geth; %v", err)
-	// 	}
-	//
-	// 	lbFallback.addr = append(lbFallback.addr, addr)
-	// 	lbFallback.urls = append(lbFallback.urls, u)
-	// 	lbFallback.clients = append(lbFallback.clients, client)
-	// 	lbFallback.blocks = append(lbFallback.blocks, lastBlock{})
-	// }
+	for _, addr := range strings.Split(*fallbackUpstreamList, ",") {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			continue
+		}
+
+		u, err := url.Parse(addr)
+		if err != nil {
+			log.Fatalf("can not parse url; %v", err)
+		}
+
+		client, err := ethclient.Dial(addr)
+		if err != nil {
+			log.Fatalf("can not dial geth; %v", err)
+		}
+
+		lbFallback.addr = append(lbFallback.addr, addr)
+		lbFallback.urls = append(lbFallback.urls, u)
+		lbFallback.clients = append(lbFallback.clients, client)
+		lbFallback.blocks = append(lbFallback.blocks, lastBlock{})
+	}
 
 	// on startup, we don't have check last block yet
 	// TODO: add readiness health check to send healthy state after first upstream check
 
 	go lbUpstream.runUpdateLoop(*healthCheckInterval, *healthCheckDeadline)
 	go lbWs.runUpdateLoop(*healthCheckInterval, *healthCheckDeadline)
-	// go lbFallback.runUpdateLoop(*fallbackHealthCheckInterval, *fallbackHealthCheckDeadline)
+	go lbFallback.runUpdateLoop(*fallbackHealthCheckInterval, *fallbackHealthCheckDeadline)
 
 	var s parapet.Middlewares
 
@@ -274,6 +274,8 @@ type lb struct {
 	clients  []*ethclient.Client
 	blocks   []lastBlock
 
+	fallback *lb
+
 	// tr
 	i uint32
 }
@@ -398,16 +400,15 @@ func highestBlock(blockNumbers []uint64) uint64 {
 var (
 	trs = map[string]http.RoundTripper{
 		"http": &upstream.HTTPTransport{
-			MaxIdleConns: 1000,
+			MaxIdleConns: 500,
 		},
 		"https": &upstream.HTTPSTransport{
-			MaxIdleConns: 1000,
+			MaxIdleConns: 500,
 		},
 	}
 )
 
-// RoundTrip sends a request to upstream server
-func (lb *lb) RoundTrip(r *http.Request) (*http.Response, error) {
+func (lb *lb) roundTrip(r *http.Request) (*http.Response, error) {
 	lb.mu.RLock()
 	targets := lb.bestURLs
 	lb.mu.RUnlock()
@@ -425,6 +426,44 @@ func (lb *lb) RoundTrip(r *http.Request) (*http.Response, error) {
 	r.URL.Path = path.Join(t.Path, r.URL.Path)
 	r.Host = t.Host
 	return trs[t.Scheme].RoundTrip(r)
+}
+
+func (lb *lb) RoundTrip(r *http.Request) (*http.Response, error) {
+	if lb.fallback == nil {
+		return lb.roundTrip(r)
+	}
+
+	lb.mu.RLock()
+	block := lb.block
+	lb.mu.RUnlock()
+
+	if block == nil {
+		// lb don't have any block
+		return lb.fallback.RoundTrip(r)
+	}
+
+	// TODO: retry fail request
+
+	t := time.Unix(int64(block.Time), 0)
+	ready := time.Since(t) <= healthyDuration
+
+	// our lb is not ready but let check is the fallback is faster than us
+	if !ready {
+		lb.fallback.mu.RLock()
+		fallbackBlock := lb.fallback.block
+		lb.fallback.mu.RUnlock()
+
+		if fallbackBlock == nil {
+			// fallback not available
+			return lb.roundTrip(r)
+		}
+		ready = block.Time >= fallbackBlock.Time
+	}
+
+	if !ready {
+		return lb.fallback.RoundTrip(r)
+	}
+	return lb.roundTrip(r)
 }
 
 func (lb *lb) upstreams(w http.ResponseWriter, r *http.Request) {
