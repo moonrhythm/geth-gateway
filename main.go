@@ -428,11 +428,33 @@ func (lb *lb) roundTrip(r *http.Request) (*http.Response, error) {
 	return trs[t.Scheme].RoundTrip(r)
 }
 
-func (lb *lb) RoundTrip(r *http.Request) (*http.Response, error) {
+func (lb *lb) roundTripWithFallback(r *http.Request) (*http.Response, error) {
 	if lb.isFallback() {
 		return lb.fallback.RoundTrip(r)
 	}
 	return lb.roundTrip(r)
+}
+
+func isResponseRetryable(resp *http.Response) bool {
+	if resp == nil {
+		return true
+	}
+	if resp.StatusCode >= 500 {
+		return true
+	}
+	return false
+}
+
+func (lb *lb) RoundTrip(r *http.Request) (resp *http.Response, err error) {
+	for i := 0; i < 3; i++ {
+		resp, err = lb.roundTripWithFallback(r)
+		if err == nil && !isResponseRetryable(resp) {
+			return
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+	return
 }
 
 func (lb *lb) isFallback() bool {
