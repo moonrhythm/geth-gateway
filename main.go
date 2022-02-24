@@ -143,14 +143,14 @@ func main() {
 	// upstreams
 	{
 		l := location.Exact("/upstreams")
-		l.Use(parapet.Handler(lbUpstream.upstreams))
+		l.Use(parapet.Handler(lbUpstream.upstreamsHandler))
 		s.Use(l)
 	}
 
 	// ws upstreams
 	{
 		l := location.Exact("/wsupstreams")
-		l.Use(parapet.Handler(lbWs.upstreams))
+		l.Use(parapet.Handler(lbWs.upstreamsHandler))
 		s.Use(l)
 	}
 
@@ -429,8 +429,15 @@ func (lb *lb) roundTrip(r *http.Request) (*http.Response, error) {
 }
 
 func (lb *lb) RoundTrip(r *http.Request) (*http.Response, error) {
+	if lb.isFallback() {
+		return lb.fallback.RoundTrip(r)
+	}
+	return lb.roundTrip(r)
+}
+
+func (lb *lb) isFallback() bool {
 	if lb.fallback == nil {
-		return lb.roundTrip(r)
+		return false
 	}
 
 	lb.mu.RLock()
@@ -439,10 +446,8 @@ func (lb *lb) RoundTrip(r *http.Request) (*http.Response, error) {
 
 	if block == nil {
 		// lb don't have any block
-		return lb.fallback.RoundTrip(r)
+		return true
 	}
-
-	// TODO: retry fail request
 
 	t := time.Unix(int64(block.Time), 0)
 	ready := time.Since(t) <= healthyDuration
@@ -455,30 +460,32 @@ func (lb *lb) RoundTrip(r *http.Request) (*http.Response, error) {
 
 		if fallbackBlock == nil {
 			// fallback not available
-			return lb.roundTrip(r)
+			return false
 		}
 		ready = block.Time >= fallbackBlock.Time
 	}
 
-	if !ready {
-		return lb.fallback.RoundTrip(r)
-	}
-	return lb.roundTrip(r)
+	return !ready
 }
 
-func (lb *lb) upstreams(w http.ResponseWriter, r *http.Request) {
+type upstreamsResult struct {
+	Upstreams []string `json:"upstreams"`
+	Block     struct {
+		Number   uint64 `json:"number"`
+		Duration string `json:"duration"`
+	} `json:"block"`
+	Fallback *upstreamsResult `json:"fallback"`
+	Forward  string           `json:"forward"`
+}
+
+func (lb *lb) upstreams() upstreamsResult {
 	lb.mu.RLock()
 	block := lb.block
 	list := lb.bestURLs
 	lb.mu.RUnlock()
 
-	var resp struct {
-		Upstreams []string `json:"upstreams"`
-		Block     struct {
-			Number   uint64 `json:"number"`
-			Duration string `json:"duration"`
-		} `json:"block"`
-	}
+	var resp upstreamsResult
+	resp.Forward = "upstream"
 	for _, x := range list {
 		resp.Upstreams = append(resp.Upstreams, x.String())
 	}
@@ -486,7 +493,17 @@ func (lb *lb) upstreams(w http.ResponseWriter, r *http.Request) {
 		resp.Block.Number = block.Number.Uint64()
 		resp.Block.Duration = time.Since(time.Unix(int64(block.Time), 0)).String()
 	}
+	if lb.fallback != nil {
+		fb := lb.fallback.upstreams()
+		resp.Fallback = &fb
+	}
+	if lb.isFallback() {
+		resp.Forward = "fallback"
+	}
+	return resp
+}
 
+func (lb *lb) upstreamsHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(lb.upstreams())
 }
