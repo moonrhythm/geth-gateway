@@ -404,6 +404,7 @@ var (
 		},
 		"https": &upstream.HTTPSTransport{
 			MaxIdleConns: 500,
+			MaxConn:      2000,
 		},
 	}
 )
