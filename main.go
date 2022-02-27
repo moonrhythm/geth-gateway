@@ -403,8 +403,9 @@ var (
 			MaxIdleConns: 500,
 		},
 		"https": &upstream.HTTPSTransport{
-			MaxIdleConns: 500,
-			MaxConn:      2000,
+			MaxIdleConns:    500,
+			MaxConn:         2000,
+			IdleConnTimeout: 30 * time.Second,
 		},
 	}
 )
