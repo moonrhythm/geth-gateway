@@ -78,21 +78,14 @@ func main() {
 			log.Fatalf("can not parse url; %v", err)
 		}
 
-		client, err := ethclient.Dial(addr)
-		if err != nil {
-			log.Fatalf("can not dial geth; %v", err)
-		}
-
 		if u.Scheme == "ws" || u.Scheme == "wss" {
 			u.Scheme = "http" + strings.TrimPrefix(u.Scheme, "ws") // http or https
 			lbWs.addr = append(lbWs.addr, addr)
 			lbWs.urls = append(lbWs.urls, u)
-			lbWs.clients = append(lbWs.clients, client)
 			lbWs.blocks = append(lbWs.blocks, lastBlock{})
 		} else {
 			lbUpstream.addr = append(lbUpstream.addr, addr)
 			lbUpstream.urls = append(lbUpstream.urls, u)
-			lbUpstream.clients = append(lbUpstream.clients, client)
 			lbUpstream.blocks = append(lbUpstream.blocks, lastBlock{})
 		}
 	}
@@ -108,14 +101,8 @@ func main() {
 			log.Fatalf("can not parse url; %v", err)
 		}
 
-		client, err := ethclient.Dial(addr)
-		if err != nil {
-			log.Fatalf("can not dial geth; %v", err)
-		}
-
 		lbFallback.addr = append(lbFallback.addr, addr)
 		lbFallback.urls = append(lbFallback.urls, u)
-		lbFallback.clients = append(lbFallback.clients, client)
 		lbFallback.blocks = append(lbFallback.blocks, lastBlock{})
 	}
 
@@ -271,7 +258,6 @@ type lb struct {
 	bestURLs []*url.URL
 	block    *types.Header
 	updated  time.Time
-	clients  []*ethclient.Client
 	blocks   []lastBlock
 
 	fallback *lb
@@ -326,7 +312,12 @@ func (lb *lb) updateLastBlock(ctx context.Context) {
 		go func() {
 			defer wg.Done()
 
-			block, _ := getLastBlock(ctx, lb.clients[i], &lb.blocks[i], true)
+			client, err := getClient(ctx, lb.addr[i])
+			if err != nil {
+				return
+			}
+
+			block, _ := getLastBlock(ctx, client, &lb.blocks[i], true)
 			if block == nil {
 				return
 			}
@@ -530,4 +521,36 @@ func (lb *lb) upstreams() upstreamsResult {
 func (lb *lb) upstreamsHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(lb.upstreams())
+}
+
+var (
+	clients   = map[string]*ethclient.Client{}
+	muClients sync.RWMutex
+)
+
+func getClient(ctx context.Context, addr string) (*ethclient.Client, error) {
+	muClients.RLock()
+	c := clients[addr]
+	muClients.RUnlock()
+
+	if c != nil {
+		return c, nil
+	}
+
+	var err error
+	c, err = ethclient.DialContext(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	muClients.Lock()
+	defer muClients.Unlock()
+
+	if clients[addr] == nil {
+		clients[addr] = c
+	} else {
+		c.Close()
+	}
+
+	return clients[addr], nil
 }
