@@ -106,8 +106,29 @@ func main() {
 		lbFallback.blocks = append(lbFallback.blocks, lastBlock{})
 	}
 
-	// on startup, we don't have check last block yet
-	// TODO: add readiness health check to send healthy state after first upstream check
+	{
+		lbs := []*lb{&lbUpstream, &lbWs, &lbFallback}
+
+		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+
+		var wg sync.WaitGroup
+		for _, x := range lbs {
+			x := x
+
+			if len(x.addr) == 0 {
+				continue
+			}
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				x.updateLastBlock(ctx)
+			}()
+		}
+		wg.Wait()
+		cancel()
+	}
 
 	go lbUpstream.runUpdateLoop(*healthCheckInterval, *healthCheckDeadline)
 	go lbWs.runUpdateLoop(*healthCheckInterval, *healthCheckDeadline)
