@@ -20,6 +20,7 @@ import (
 	"github.com/moonrhythm/parapet/pkg/location"
 	"github.com/moonrhythm/parapet/pkg/logger"
 	"github.com/moonrhythm/parapet/pkg/prom"
+	"github.com/moonrhythm/parapet/pkg/stripprefix"
 	"github.com/moonrhythm/parapet/pkg/upstream"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -164,6 +165,7 @@ func main() {
 
 	{
 		l := location.Exact("/ws")
+		l.Use(stripprefix.New("/ws"))
 		l.Use(upstream.New(&lbWs))
 		s.Use(l)
 	}
