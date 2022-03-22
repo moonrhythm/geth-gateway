@@ -1,4 +1,4 @@
-FROM golang:1.17.7
+FROM golang:1.18
 
 ENV CGO_ENABLED=0
 WORKDIR /workspace
@@ -14,6 +14,6 @@ FROM gcr.io/distroless/static
 
 WORKDIR /app
 
-COPY --from=0 /workspace/geth-gateway ./
+COPY --from=0 --link /workspace/geth-gateway ./
 
 ENTRYPOINT ["/app/geth-gateway"]
