@@ -41,6 +41,7 @@ func main() {
 		tlsKey                      = flag.String("tls.key", "", "TLS private key file")
 		tlsCert                     = flag.String("tls.cert", "", "TLS certificate file")
 		upstreamList                = flag.String("upstream", "", "Upstream list")
+		upstreamOverrideHost        = flag.Bool("upstream.override-host", false, "override http host header to upstream")
 		gethHealthyDuration         = flag.Duration("healthy-duration", time.Minute, "duration from last block that mark as healthy")
 		healthCheckDeadline         = flag.Duration("health-check.deadline", 4*time.Second, "deadline when run health check")
 		healthCheckInterval         = flag.Duration("health-check.interval", 2*time.Second, "health check interval")
@@ -55,6 +56,7 @@ func main() {
 	log.Printf("HTTP address: %s", *addr)
 	log.Printf("HTTPS address: %s", *tlsAddr)
 	log.Printf("Upstream: %s", *upstreamList)
+	log.Printf("Upstream Override Host: %t", *upstreamOverrideHost)
 	log.Printf("Healthy Duration: %s", *gethHealthyDuration)
 	log.Printf("Health Check Deadline: %s", *healthCheckDeadline)
 	log.Printf("Health Check Interval: %s", *healthCheckInterval)
@@ -275,13 +277,14 @@ func healthz(w http.ResponseWriter, r *http.Request) {
 }
 
 type lb struct {
-	mu       sync.RWMutex
-	addr     []string
-	urls     []*url.URL
-	bestURLs []*url.URL
-	block    *types.Header
-	updated  time.Time
-	blocks   []lastBlock
+	mu           sync.RWMutex
+	addr         []string
+	urls         []*url.URL
+	bestURLs     []*url.URL
+	block        *types.Header
+	updated      time.Time
+	blocks       []lastBlock
+	overrideHost bool
 
 	fallback *lb
 
@@ -441,6 +444,9 @@ func (lb *lb) roundTrip(r *http.Request) (*http.Response, error) {
 	r.URL.Host = t.Host
 	r.URL.Path = path.Join(t.Path, r.URL.Path)
 	r.Host = t.Host
+	r.Header.Del("X-Forwarded-For")
+	r.Header.Del("X-Forwarded-Proto")
+	r.Header.Del("X-Real-Ip")
 	return trs[t.Scheme].RoundTrip(r)
 }
 
