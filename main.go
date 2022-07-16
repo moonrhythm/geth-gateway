@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -48,6 +49,7 @@ func main() {
 		fallbackUpstreamList        = flag.String("fallback.upstream", "", "fallback upstream list")
 		fallbackHealthCheckDeadline = flag.Duration("fallback.health-check.deadline", 5*time.Second, "fallback deadline when run health check")
 		fallbackHealthCheckInterval = flag.Duration("fallback.health-check.interval", 5*time.Second, "fallback health check interval")
+		requestMaxBodySize          = flag.Int64("request.max-body-size", 0, "max request body size")
 	)
 
 	flag.Parse()
@@ -63,6 +65,7 @@ func main() {
 	log.Printf("Fallback Upstream: %s", *fallbackUpstreamList)
 	log.Printf("Fallback Health Check Deadline: %s", *fallbackHealthCheckDeadline)
 	log.Printf("Fallback Health Check Interval: %s", *fallbackHealthCheckInterval)
+	log.Printf("Request Max Body Size: %d", *requestMaxBodySize)
 
 	healthyDuration = *gethHealthyDuration
 	lbUpstream.fallback = &lbFallback
@@ -173,6 +176,7 @@ func main() {
 	}
 
 	// http
+	s.Use(bufferRequestBody(*requestMaxBodySize))
 	s.Use(upstream.New(&lbUpstream))
 
 	var wg sync.WaitGroup
@@ -447,6 +451,9 @@ func (lb *lb) roundTrip(r *http.Request) (*http.Response, error) {
 	r.Header.Del("X-Forwarded-For")
 	r.Header.Del("X-Forwarded-Proto")
 	r.Header.Del("X-Real-Ip")
+	if b, ok := r.Body.(retryableBody); ok {
+		b.Reset()
+	}
 	return trs[t.Scheme].RoundTrip(r)
 }
 
@@ -461,7 +468,7 @@ func isResponseRetryable(resp *http.Response) bool {
 	if resp == nil {
 		return true
 	}
-	if resp.StatusCode >= 500 {
+	if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
 		return true
 	}
 	return false
@@ -582,4 +589,47 @@ func getClient(ctx context.Context, addr string) (*ethclient.Client, error) {
 	}
 
 	return clients[addr], nil
+}
+
+func bufferRequestBody(size int64) parapet.MiddlewareFunc {
+	return func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet || r.Method == http.MethodHead || r.ContentLength == 0 {
+				h.ServeHTTP(w, r)
+				return
+			}
+			if r.ContentLength < 0 {
+				http.Error(w, "invalid content length", http.StatusBadRequest)
+				return
+			}
+			if size > 0 && r.ContentLength > size {
+				http.Error(w, "content length too large", http.StatusBadRequest)
+				return
+			}
+
+			var buf bytes.Buffer
+			_, err := buf.ReadFrom(r.Body)
+			if err != nil {
+				http.Error(w, "failed to read body", http.StatusBadRequest)
+				return
+			}
+			r.Body = retryableBody{
+				raw: buf.Bytes(),
+				buf: &buf,
+			}
+			h.ServeHTTP(w, r)
+		})
+	}
+}
+
+type retryableBody struct {
+	raw []byte
+	buf *bytes.Buffer
+}
+
+func (b retryableBody) Read(p []byte) (n int, err error) { return b.buf.Read(p) }
+func (retryableBody) Close() error                       { return nil }
+
+func (b retryableBody) Reset() {
+	b.buf = bytes.NewBuffer(b.raw)
 }
