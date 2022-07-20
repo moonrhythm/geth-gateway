@@ -23,6 +23,8 @@ Gateway for multiple geth nodes
 | -fallback.upstream              | string[] | Fallback upstream list                                        |         |
 | -fallback.health-check.deadline | duration | Fallback deadline when run health check                       | 5s      |
 | -fallback.health-check.interval | duration | Fallback health check interval                                | 5s      |
+| -retry.max                      | int      | Max retry count                                               | 3       |
+| -retry.backoff                  | duration | Backoff duration                                              | 10ms    |
 
 ## License
 

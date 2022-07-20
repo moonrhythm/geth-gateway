@@ -32,6 +32,9 @@ var (
 	lbUpstream lb
 	lbFallback lb
 	lbWs       lb
+
+	maxRetry     = 3
+	retryBackoff = 10 * time.Millisecond
 )
 
 func main() {
@@ -50,6 +53,8 @@ func main() {
 		fallbackHealthCheckDeadline = flag.Duration("fallback.health-check.deadline", 5*time.Second, "fallback deadline when run health check")
 		fallbackHealthCheckInterval = flag.Duration("fallback.health-check.interval", 5*time.Second, "fallback health check interval")
 		requestMaxBodySize          = flag.Int64("request.max-body-size", 0, "max request body size")
+		retryMax                    = flag.Int("retry.max", maxRetry, "max retry")
+		retryBackoffDuration        = flag.Duration("retry.backoff", retryBackoff, "retry backoff")
 	)
 
 	flag.Parse()
@@ -66,9 +71,16 @@ func main() {
 	log.Printf("Fallback Health Check Deadline: %s", *fallbackHealthCheckDeadline)
 	log.Printf("Fallback Health Check Interval: %s", *fallbackHealthCheckInterval)
 	log.Printf("Request Max Body Size: %d", *requestMaxBodySize)
+	log.Printf("Retry Max: %d", *retryMax)
+	log.Printf("Retry Backoff: %s", *retryBackoffDuration)
 
 	healthyDuration = *gethHealthyDuration
 	lbUpstream.fallback = &lbFallback
+	maxRetry = *retryMax
+	if maxRetry < 0 {
+		maxRetry = 0
+	}
+	retryBackoff = *retryBackoffDuration
 
 	prom.Registry().MustRegister(headDuration, headNumber)
 	go prom.Start(":6060")
@@ -475,13 +487,13 @@ func isResponseRetryable(resp *http.Response) bool {
 }
 
 func (lb *lb) RoundTrip(r *http.Request) (resp *http.Response, err error) {
-	for i := 0; i < 3; i++ {
+	for i := 0; i <= maxRetry; i++ {
 		resp, err = lb.roundTripWithFallback(r)
 		if err == nil && !isResponseRetryable(resp) {
 			return
 		}
 
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(retryBackoff)
 	}
 	return
 }
