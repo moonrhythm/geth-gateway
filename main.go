@@ -471,7 +471,7 @@ func (lb *lb) roundTrip(r *http.Request) (*http.Response, error) {
 
 func (lb *lb) roundTripWithFallback(r *http.Request) (*http.Response, error) {
 	if lb.isFallback() {
-		return lb.fallback.RoundTrip(r)
+		return lb.fallback.roundTrip(r)
 	}
 	return lb.roundTrip(r)
 }
