@@ -463,7 +463,7 @@ func (lb *lb) roundTrip(r *http.Request) (*http.Response, error) {
 	r.Header.Del("X-Forwarded-For")
 	r.Header.Del("X-Forwarded-Proto")
 	r.Header.Del("X-Real-Ip")
-	if b, ok := r.Body.(retryableBody); ok {
+	if b, ok := r.Body.(*retryableBody); ok {
 		b.Reset()
 	}
 	return trs[t.Scheme].RoundTrip(r)
@@ -625,7 +625,7 @@ func bufferRequestBody(size int64) parapet.MiddlewareFunc {
 				http.Error(w, "failed to read body", http.StatusBadRequest)
 				return
 			}
-			r.Body = retryableBody{
+			r.Body = &retryableBody{
 				raw: buf.Bytes(),
 				buf: &buf,
 			}
@@ -639,9 +639,9 @@ type retryableBody struct {
 	buf *bytes.Buffer
 }
 
-func (b retryableBody) Read(p []byte) (n int, err error) { return b.buf.Read(p) }
-func (retryableBody) Close() error                       { return nil }
+func (b *retryableBody) Read(p []byte) (n int, err error) { return b.buf.Read(p) }
+func (*retryableBody) Close() error                       { return nil }
 
-func (b retryableBody) Reset() {
+func (b *retryableBody) Reset() {
 	b.buf = bytes.NewBuffer(b.raw)
 }
