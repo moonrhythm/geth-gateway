@@ -466,7 +466,15 @@ func (lb *lb) roundTrip(r *http.Request) (*http.Response, error) {
 	if b, ok := r.Body.(*retryableBody); ok {
 		b.Reset()
 	}
-	return trs[t.Scheme].RoundTrip(r)
+	resp, err := trs[t.Scheme].RoundTrip(r)
+	if isResponseRetryable(resp) {
+		var status int
+		if resp != nil {
+			status = resp.StatusCode
+		}
+		log.Printf("lb: retryable upstream=%s, status=%d", t, status)
+	}
+	return resp, err
 }
 
 func (lb *lb) roundTripWithFallback(r *http.Request) (*http.Response, error) {
