@@ -1,11 +1,11 @@
 module github.com/moonrhythm/geth-gateway
 
-go 1.18
+go 1.19
 
 require (
-	github.com/ethereum/go-ethereum v1.10.20
-	github.com/moonrhythm/parapet v0.11.1
-	github.com/prometheus/client_golang v1.12.2
+	github.com/ethereum/go-ethereum v1.10.26
+	github.com/moonrhythm/parapet v0.11.2
+	github.com/prometheus/client_golang v1.14.0
 )
 
 require (
@@ -22,9 +22,9 @@ require (
 	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/kavu/go_reuseport v1.5.0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
-	github.com/prometheus/client_model v0.2.0 // indirect
-	github.com/prometheus/common v0.32.1 // indirect
-	github.com/prometheus/procfs v0.7.3 // indirect
+	github.com/prometheus/client_model v0.3.0 // indirect
+	github.com/prometheus/common v0.37.0 // indirect
+	github.com/prometheus/procfs v0.8.0 // indirect
 	github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible // indirect
 	github.com/tklauser/go-sysconf v0.3.5 // indirect
 	github.com/tklauser/numcpus v0.2.2 // indirect
@@ -32,6 +32,6 @@ require (
 	golang.org/x/net v0.0.0-20220708220712-1185a9018129 // indirect
 	golang.org/x/sys v0.0.0-20220715151400-c0bba94af5f8 // indirect
 	golang.org/x/text v0.3.7 // indirect
-	google.golang.org/protobuf v1.28.0 // indirect
+	google.golang.org/protobuf v1.28.1 // indirect
 	gopkg.in/natefinch/npipe.v2 v2.0.0-20160621034901-c1b8fa8bdcce // indirect
 )
