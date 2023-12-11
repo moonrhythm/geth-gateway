@@ -2,7 +2,7 @@
 
 Gateway for multiple geth nodes
 
-> gcr.io/moonrhythm-containers/geth-gateway
+> registry.moonrhythm.io/geth-gateway
 
 ## Features
 
