@@ -1,7 +1,12 @@
-FROM golang:1.21.0
+FROM registry.moonrhythm.io/builder
 
 ENV CGO_ENABLED=0
+
 WORKDIR /workspace
+
+ADD .tool-versions .
+RUN asdf install
+
 ADD go.mod go.sum ./
 RUN go mod download
 ADD . .
